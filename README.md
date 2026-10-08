@@ -6,9 +6,143 @@ Discord上で組織残高、個人残高、組織ローン、BJローン、個�
 
 **Google Sheetsを業務データの唯一の正データ（Single Source of Truth）として使います。SQLite、EF Core、DbContext、Migrationは使用しません。** Bot起動時にローカルの業務DBを作成する必要はありません。残高、操作履歴、スナップショット、ジョブ履歴、通知OutboxはGoogle Sheetsから読み書きします。
 
-## 必要なもの
+## セットアップの流れ（Docker）
 
-Dockerで動かす場合は、DockerとDocker Composeだけで動きます（.NET SDKは不要）。手順は「[Dockerでの起動](#dockerでの起動)」を参照してください。ソースから動かす場合は、次のものが必要です。
+Dockerだけで動かせます。.NET SDKやソースコードは不要です。次の順に進めてください。
+
+| 手順 | 内容 |
+| --- | --- |
+| 1 | Dockerをインストールする |
+| 2 | 公開リポジトリから必要なファイルを取得する |
+| 3 | Discord Botを作成する |
+| 4 | Google OAuthクライアントを作成する |
+| 5 | `.env` を設定する |
+| 6 | Dockerイメージをpullして起動する |
+| 7 | Botをサーバーに招待する |
+| 8 | Google Driveを接続する |
+
+### 1. Dockerをインストールする
+
+- Windows / macOS: [Docker Desktop](https://www.docker.com/products/docker-desktop/) をインストールして起動します。
+- Linux: Docker Engine と Docker Compose プラグインをインストールします。
+
+次のコマンドでバージョンが表示されれば準備完了です。
+
+```bash
+docker --version
+docker compose version
+```
+
+### 2. 公開リポジトリから必要なファイルを取得する
+
+公開リポジトリ https://github.com/nantoka33/NovaDiscordBotPublic から、`docker-compose.yml` と `.env.example` を取得します。
+
+```bash
+git clone https://github.com/nantoka33/NovaDiscordBotPublic.git
+cd NovaDiscordBotPublic
+```
+
+Gitを使わない場合は、リポジトリページの **Code → Download ZIP** で取得して展開し、そのフォルダで以降のコマンドを実行してください。
+
+### 3. Discord Botを作成する
+
+1. [Discord Developer Portal](https://discord.com/developers/applications) で **New Application** を作成します。
+2. **General Information** の **Application ID** を控えます（`DISCORD_CLIENT_ID`）。
+3. **Bot** ページで **Reset Token** を押してトークンを控えます（`DISCORD_TOKEN`）。Privileged Gateway Intents はすべてOFFのままで構いません。
+4. **Installation** ページで、インストールのコンテキストは「ギルドのインストール」だけにチェックを入れます。
+5. 同じページの「デフォルトのインストール設定」で、スコープに `applications.commands` と `bot` を、権限に次の5つを設定して保存します。
+   - チャンネルを表示
+   - メッセージを送る
+   - チャンネルを管理（`menu` / `bot返信用` / `通知用` の自動作成に必要）
+   - メッセージ履歴を閲覧（共有メニューの更新に必要）
+   - 埋め込みリンク（共有メニューの表示に必要）
+6. 「インストールリンク」に表示される **Discord提供リンク** を控えます（手順7で使います）。
+
+### 4. Google OAuthクライアントを作成する
+
+1. [Google Cloud Console](https://console.cloud.google.com/) でプロジェクトを用意します。
+2. **Google Drive API** と **Google Sheets API** を有効化します。
+3. **OAuth同意画面** を設定します。テストユーザーの場合は、Botで使うGoogleアカウントを追加します。
+4. **認証情報 → OAuthクライアントID** を、種類「ウェブ アプリケーション」で作成します。
+5. 「承認済みのリダイレクトURI」に `http://localhost:5000/google/callback` を登録します。
+6. 表示された **クライアントID** と **クライアントシークレット** を控えます。
+
+認証は、Dockerを動かしているPCのブラウザで行います（`localhost` が自分のPCを指すため）。別の端末から認証したい場合は、公開URLを使います。「[Google OAuthの設定（Docker）](#google-oauthの設定docker)」を参照してください。
+
+### 5. `.env` を設定する
+
+`.env.example` をコピーして `.env` を作り、【必須】の5項目を設定します。
+
+```bash
+cp .env.example .env        # Windows (PowerShell / cmd): copy .env.example .env
+```
+
+| 変数 | 設定する値 |
+| --- | --- |
+| `DISCORD_TOKEN` | 手順3のBot Token |
+| `DISCORD_CLIENT_ID` | 手順3のApplication ID |
+| `GOOGLE_CLIENT_ID` | 手順4のクライアントID |
+| `GOOGLE_CLIENT_SECRET` | 手順4のクライアントシークレット |
+| `GOOGLE_REDIRECT_URI` | `http://localhost:5000/google/callback`（手順4で登録したURLと同じもの） |
+
+チャンネルのID（`DISCORD_*_CHANNEL_ID`）は空のままで構いません。Botをサーバーに招待すると自動で作成・登録されます。`.env` は秘密情報なので、GitやGitHubに公開しないでください。
+
+### 6. Dockerイメージをpullして起動する
+
+```bash
+docker compose pull
+docker compose up -d
+```
+
+`docker compose pull` が `ghcr.io/nantoka33/novadiscordbot:latest` を取得し、`docker compose up -d` がバックグラウンドで起動します。
+
+状態を確認します。
+
+```bash
+docker compose ps
+docker compose logs -f novadiscordbot
+```
+
+`STATUS` が `healthy` になれば正常です（Discordへの接続を待つため、起動直後は `starting` で、最大1分ほどかかります）。ブラウザで http://localhost:5000/health を開いて `{"status":"ok"}` が出ることも確認できます。
+
+> **pullできない場合:** イメージが非公開のままだと `unauthorized` / `denied` エラーになります。メンテナーがGHCRのパッケージを Public にするか、`docker login ghcr.io`（`read:packages` 権限のトークン）が必要です。
+
+### 7. Botをサーバーに招待する
+
+手順3で控えた **Discord提供リンク** をブラウザで開き、Botを追加するサーバーを選んで許可します。
+
+- 追加すると、Botが `menu` / `bot返信用` / `通知用` の3チャンネルを自動作成します（同名のチャンネルがあれば再利用）。IDは自動登録され、`menu` チャンネルに共有メニューが投稿されます。
+- すでにBotが参加しているサーバーの場合は、`.env` の3つのチャンネルIDを空にして `data/channels.json` がない状態で、再起動すると同じ処理が動きます。
+- スラッシュコマンドが出ない場合は、`.env` の `DISCORD_GUILD_ID` を確認してください。設定するとそのサーバーにだけコマンドが登録されます。通常は空欄にしてください。
+
+### 8. Google Driveを接続する
+
+Discordで次の順に実行します。
+
+1. `/googledrive connect` を実行し、表示されたリンクからGoogleアカウントを接続します（10分以内に完了してください）。
+2. `/googledrive folder id:<DriveフォルダのIDまたはURL>` を実行します。
+3. 表示される確認ボタン（OK）を押すと、データ用のSpreadsheetが作成され、タブとヘッダーが初期化されます。
+4. `/googledrive status` と `/sheets status` で接続と保存先を確認します。
+5. 既存のSpreadsheetを使う場合は、`.env` に `GOOGLE_SHEETS_SPREADSHEET_ID` を設定してBotを再起動します。
+
+これで利用できます。`menu` チャンネルの共有メニュー、またはスラッシュコマンドから操作してください。
+
+### 運用コマンド
+
+| 操作 | コマンド |
+| --- | --- |
+| 停止 | `docker compose down` |
+| 更新 | `docker compose pull` → `docker compose up -d` |
+| ログ確認 | `docker compose logs -f novadiscordbot` |
+| 完全削除 | `docker compose down -v` |
+
+> **注意:** `-v` を付けると、永続化用のボリューム（`nova_data`）も削除されます。Google OAuthのトークン、Data Protection鍵、自動登録したチャンネルIDが消えるため、削除後は `/googledrive connect` からやり直す必要があります。通常の停止・更新では `-v` を付けないでください。
+
+## 設定リファレンス
+
+### 必要なもの
+
+Dockerで動かす場合は、DockerとDocker Composeだけで動きます（.NET SDKは不要）。手順は「[セットアップの流れ（Docker）](#セットアップの流れdocker)」を参照してください。ソースから動かす場合は、次のものが必要です。
 
 - .NET 8 SDK
 - Discord Bot/Application
@@ -22,7 +156,7 @@ Dockerで動かす場合は、DockerとDocker Composeだけで動きます（.NE
 
 1. Discord Developer PortalでApplicationとBotを作成します。
 2. Bot TokenとApplication IDを設定します。
-3. Botをサーバーへ招待し、`bot` と `applications.commands` のscopeを許可します。
+3. Botをサーバーへ招待し、`bot` と `applications.commands` のscopeを許可します。権限は「チャンネルを表示」「メッセージを送る」「チャンネルを管理」「メッセージ履歴を閲覧」「埋め込みリンク」が必要です。
 4. `.env` に `DISCORD_TOKEN` と `DISCORD_CLIENT_ID` を設定します。
 5. 開発時に特定サーバーへすぐSlash Commandを反映する場合は `DISCORD_GUILD_ID` を設定します。省略するとグローバル登録になり、反映に時間がかかることがあります。
 6. Botをサーバーに追加すると、`menu` / `bot返信用` / `通知用` の3チャンネルを自動作成（同名の既存チャンネルがあれば再利用）し、そのIDを自動登録して共有メニューを投稿します。この登録値は `.env` の `DISCORD_MENU_CHANNEL_ID` / `DISCORD_REPLY_CHANNEL_ID` / `DISCORD_NOTIFICATION_CHANNEL_ID` より優先されます（`data/channels.json` に保存）。自動作成にはBotへの「チャンネルの管理」権限が必要です。招待URLの権限に追加してください。
@@ -74,7 +208,7 @@ Sheetsの各タブとヘッダーは初回接続時に自動確認されます�
 
 ## 起動方法（ソースから実行）
 
-Dockerを使わず、ソースから実行する場合の手順です。Dockerで動かす場合は「[Dockerでの起動](#dockerでの起動)」を参照してください。PowerShellでリポジトリのルートから実行します。
+Dockerを使わず、ソースから実行する場合の手順です。Dockerで動かす場合は「[セットアップの流れ（Docker）](#セットアップの流れdocker)」を参照してください。PowerShellでリポジトリのルートから実行します。
 
 ```powershell
 Copy-Item .env.example .env
@@ -87,92 +221,12 @@ dotnet run --project src/Bot/NovaDiscordBot.csproj
 
 通常のコマンド起動にはDiscord設定が必要です。Google OAuth設定前でもDiscord Bot自体は起動できますが、Sheetsを使う業務コマンドはGoogle接続完了まで利用できません。
 
-## Dockerでの起動
+## Dockerの補足
 
-.NET SDKやVisual Studioをインストールせずに、Dockerだけで起動できます。イメージはGitHub Container Registry（GHCR）で公開されます。
+イメージはGitHub Container Registry（GHCR）で公開されます。
 
 - イメージ名: `ghcr.io/nantoka33/novadiscordbot`
 - タグ: `latest`（`main` の最新）、`vX.Y.Z`（Gitタグを付けたとき）、`sha-<コミット>`
-
-### 1. 必要なもの
-
-- Docker
-- Docker Compose
-
-.NET SDKは不要です。
-
-### 2. ファイル取得
-
-次の2ファイルを、同じフォルダに保存します。リポジトリ全体をcloneする必要はありません。
-
-- `docker-compose.yml`
-- `.env.example`
-
-### 3. .env作成
-
-`.env.example` をコピーして `.env` を作ります。
-
-Windows:
-
-```powershell
-copy .env.example .env
-```
-
-Linux/macOS:
-
-```bash
-cp .env.example .env
-```
-
-### 4. .env設定
-
-`.env` を開き、【必須】の5項目（`DISCORD_TOKEN`、`DISCORD_CLIENT_ID`、`GOOGLE_CLIENT_ID`、`GOOGLE_CLIENT_SECRET`、`GOOGLE_REDIRECT_URI`）を設定します。`.env` はGitにコミットしないでください。
-
-### 5. 起動
-
-```bash
-docker compose pull
-docker compose up -d
-```
-
-### 6. 状態確認
-
-```bash
-docker compose ps
-```
-
-`STATUS` が `healthy` になれば正常です。起動直後は `starting` と表示されます（Discordへの接続を待つため、最大1分ほどかかります）。
-
-### 7. ログ確認
-
-```bash
-docker compose logs -f novadiscordbot
-```
-
-### 8. Health確認
-
-ブラウザで http://localhost:5000/health を開き、`{"status":"ok"}` が表示されることを確認します。
-
-### 9. 停止
-
-```bash
-docker compose down
-```
-
-### 10. 更新
-
-```bash
-docker compose pull
-docker compose up -d
-```
-
-### 11. 完全削除
-
-```bash
-docker compose down -v
-```
-
-> **注意:** `-v` を付けると、永続化用のボリューム（`nova_data`）も削除されます。Google OAuthのトークンとData Protection鍵が消えるため、削除後は `/googledrive connect` からGoogle認証をやり直す必要があります。通常の停止・更新では `-v` を付けないでください。
 
 ### データの永続化
 
@@ -182,6 +236,7 @@ docker compose down -v
 | --- | --- |
 | `/app/data/google-tokens` | 暗号化されたGoogle OAuthトークン |
 | `/app/data/protection-keys` | トークンを暗号化するData Protection鍵 |
+| `/app/data/channels.json` | 自動作成したチャンネルID |
 
 `docker compose down` と `docker compose up -d` を繰り返しても、これらは消えません。`.env` で `GOOGLE_TOKEN_PATH` や `DATA_PROTECTION_PATH` を `/app/data` の外に変更すると、その場所は永続化されず、コンテナを作り直すたびにGoogle認証をやり直すことになります。残高などの業務データはこのボリュームではなく、Google Sheetsに保存されます。
 
@@ -210,12 +265,7 @@ docker compose -f docker-compose.dev.yml up -d --build
 
 ## 初回セットアップ
 
-1. Google OAuthとDiscordの環境変数を設定してBotを起動します。
-2. `/googledrive connect` を実行し、Googleアカウントを接続します。
-3. `/googledrive folder id:<DriveフォルダID>` を実行します。
-4. 表示される確認ボタンを押すと、テンプレートのコピーまたは空のSpreadsheetが作成されます。
-5. Botがタブとヘッダーを初期化します。`/googledrive status` と `/sheets status` で接続と保存先を確認します。
-6. 既存のSpreadsheetを使う場合は `GOOGLE_SHEETS_SPREADSHEET_ID` を設定し、Botを再起動します。
+手順は「[セットアップの流れ（Docker）](#セットアップの流れdocker)」の手順7・8を参照してください。
 
 `/sheets sync` は旧構成のDBをエクスポートする処理ではありません。現在の接続と必要タブを確認し、その結果を記録します。業務データ変更は各コマンドからSpreadsheetへ直接保存されます。
 
