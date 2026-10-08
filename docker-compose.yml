@@ -1,0 +1,38 @@
+# NovaDiscordBot - 一般利用向け（GitHub Container Registry のイメージを使用）
+#
+#   docker compose pull
+#   docker compose up -d
+#
+# 事前に .env.example を .env にコピーして値を設定してください。
+services:
+  novadiscordbot:
+    image: ghcr.io/nantoka33/novadiscordbot:latest
+    container_name: nova-discord-bot
+    restart: unless-stopped
+
+    env_file:
+      - .env
+
+    environment:
+      # コンテナ内では必ず全インターフェースの5000番でListenします（.envの値より優先）。
+      ASPNETCORE_URLS: http://0.0.0.0:5000
+
+    ports:
+      - "5000:5000"
+
+    volumes:
+      # Google OAuthトークンとData Protection鍵（/app/data/google-tokens, /app/data/protection-keys）を保持します。
+      # "docker compose down -v" で削除されるので注意してください。
+      - nova_data:/app/data
+
+    # healthcheck はイメージ（Dockerfile）に定義済みです。runtimeイメージにはwget/curlが無いため、
+    # bashの /dev/tcp で http://127.0.0.1:5000/health を確認しています。
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  nova_data:
