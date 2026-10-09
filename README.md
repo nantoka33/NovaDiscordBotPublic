@@ -296,12 +296,14 @@ Slash Commandも維持し、対象ユーザーは登録名で指定します。�
 | `OrganizationLoans` | `Id`, `DiscordUserId`, `Currency`, `Amount`, `UpdatedAtUtc` | 組織からの借入 |
 | `BjLoans` | `Id`, `DiscordUserId`, `Currency`, `Amount`, `WeeklyPayment`, `UpdatedAtUtc` | BJローンと週間返済額 |
 | `PersonalLoans` | `Id`, `LenderUserId`, `BorrowerUserId`, `Currency`, `Amount`, `UpdatedAtUtc` | 個人間貸借 |
-| `Transactions` | `Id`, `TransactionType`, `TargetType`, `TargetId`, `Currency`, `Amount`, `BeforeAmount`, `AfterAmount`, `DiscordInteractionId`, `TargetUserId`, `RelatedUserId`, `ExecutedByUserId`, `BeforeWeeklyPayment`, `AfterWeeklyPayment`, `CreatedAtUtc` | 金額変更の追記専用台帳 |
+| `Transactions` | `Id`, `TransactionType`, `TargetType`, `TargetId`, `Currency`, `Amount`, `BeforeAmount`, `AfterAmount`, `DiscordInteractionId`, `TargetUserId`, `RelatedUserId`, `ExecutedByUserId`, `BeforeWeeklyPayment`, `AfterWeeklyPayment`, `CreatedAtUtc`, `Category`, `Reason`, `Memo`, `Delta`, `BusinessDate` | 金額変更の追記専用台帳。種類・理由・メモ、符号付き増減額、05:00区切りの営業日も記録 |
 | `Snapshots` | `Id`, `SnapshotDate`, `Scope`, `DiscordUserId`, `Currency`, `Amount`, `CapturedAtUtc` | 04:00 JSTの残高基準値 |
 | `ScheduleExecutions` | `Id`, `JobName`, `ExecutionDate`, `Status`, `StartedAtUtc`, `CompletedAtUtc`, `ErrorMessage` | ジョブ名と実行日の一意な履歴 |
 | `Outbox` | `Id`, `Kind`, `Payload`, `Status`, `Attempts`, `CreatedAtUtc`, `NextAttemptAtUtc`, `LastError` | Discord通知など外部処理の再試行 |
 | `Operations` | `Id`, `DiscordInteractionId`, `ProcessedAtUtc` | Discord Interactionの重複処理防止 |
 | `Settings` | `Id`, `Key`, `Value`, `UpdatedAtUtc` | DriveフォルダIDやSheets確認時刻 |
+| `MonthlyReports` | `Id`, `Month`, `PeriodStartUtc`, `PeriodEndUtc`, `Status`, `DailyRowDates`, `MissingDates`, `ReconcileResult`, `OutboxIds`, `CreatedAtUtc`, `Note` | 月次報告ごとの作成・検算・投稿の記録 |
+| `yyyy-MM`（例：`2026-10`） | `Id`, `RowType`, `BusinessDate`, `PeriodStartUtc`, `PeriodEndUtc`, `Scope`, `TargetUserId`, `RelatedUserId`, `TargetName`, `Currency`, `Category`, `OpeningAmount`, `ClosingAmount`, `NetChange`, `IncreaseTotal`, `DecreaseTotal`, `ChangeCount`, `ReconcileStatus`, `LastTransactionId`, `Source`, `RecordedAtUtc` | 月ごとの集計結果。`RowType` が `Daily`（営業日ごと）、`Category`（種類別）、`Monthly`（月合計）。初回の書き込み時に作成 |
 
 `Operations`, `Transactions`, `Snapshots`, `ScheduleExecutions`, `Outbox` の履歴行は物理削除しません。ユーザーの削除は論理削除です。残高、台帳行、Interaction処理済み記録は1つのSheets `batchUpdate` にまとめて保存します。
 
@@ -315,6 +317,8 @@ Int64金額とUInt64 Discord IDはAPIへ送る際に文字列化します。Goog
 | `/add user` | 登録名を追加・再有効化 | 結果は本人のみ表示、公開ボタンで全体へ公開 |
 | `/delete user` | 登録名を論理無効化 | 結果は本人のみ表示、公開ボタンで全体へ公開 |
 | `/userlist` | 有効ユーザー一覧 | 結果は本人のみ表示、公開ボタンで全体へ公開 |
+| `/adjust organization` | 組織残高を増減（1件の収入・支出） | 結果は本人のみ表示、公開ボタンで全体へ公開 |
+| `/adjust user` | 登録名の個人残高を増減 | 結果は本人のみ表示、公開ボタンで全体へ公開 |
 | `/update organization` | 組織残高を指定値に設定 | 結果は本人のみ表示、公開ボタンで全体へ公開 |
 | `/update user` | 登録名の個人残高を指定値に設定 | 結果は本人のみ表示、公開ボタンで全体へ公開 |
 | `/show organization` | 組織残高を表示 | 結果は本人のみ表示、公開ボタンで全体へ公開 |
@@ -331,9 +335,14 @@ Int64金額とUInt64 Discord IDはAPIへ送る際に文字列化します。Goog
 | `/googledrive folder` | Drive保存先を設定 | 本人だけに表示 |
 | `/sheets sync` | 保存先の接続とタブを確認 | 本人だけに表示 |
 | `/sheets status` | Sheets接続と最終確認を表示 | 本人だけに表示 |
+| `/report status` | 月次報告の作成・検算・投稿状況 | 管理者のみ（既定）、本人だけに表示 |
+| `/report rebuild` | 月次タブを `Transactions` から再集計（投稿しない） | 管理者のみ（既定）、本人だけに表示 |
+| `/report post` | 月次報告を通知用チャンネルへ再投稿 | 管理者のみ（既定）、本人だけに表示 |
 | `/help` | カテゴリ別ヘルプ | 本人だけに表示 |
 
-通貨引数は `JPY` または `BM` で、省略時はJPYです（`/bjlone update` と `/bjlone user` はJPY専用で通貨引数はありません）。ロールによる実行制限はなく、全コマンドを誰でも実行できます。`/update` は残高を指定値へ設定し、`/novalone update`、`/bjlone update`、`/lone` は金額の正負で貸付・返済を記録します。借入残高が負になる返済、自己貸借、金額のInt64オーバーフローは拒否されます。
+通貨引数は `JPY` または `BM` で、省略時はJPYです（`/bjlone update` と `/bjlone user` はJPY専用で通貨引数はありません）。`/report` はサーバー管理者だけが既定で実行でき、それ以外のコマンドは誰でも実行できます。
+
+金額を変える操作（`/adjust`、`/update`、`/novalone update`、`/bjlone update`、`/lone` とメニューの各操作）では、種類（収入・支出・貸付・返済・振替・残高修正・その他）と理由（100文字以内）が必須で、メモ（500文字以内）は任意です。ローンの種類は省略でき、省略時は増加を「貸付」、減少を「返済」として記録します。日々の収入・支出は `/adjust` で1件ずつ記録し、`/update` は実残高に合わせる修正に使うと、月次報告の内訳が正確になります。`/update` は残高を指定値へ設定し、`/novalone update`、`/bjlone update`、`/lone` は金額の正負で貸付・返済を記録します。借入残高が負になる返済、自己貸借、金額のInt64オーバーフローは拒否されます。
 
 ## スケジュール
 
@@ -343,7 +352,11 @@ Int64金額とUInt64 Discord IDはAPIへ送る際に文字列化します。Goog
 | --- | --- |
 | 02:30 | 前回までの04:00組織基準値との差額をOutboxへ登録 |
 | 04:00 | 組織・登録ユーザーのJPY/BM残高を `Snapshots` に保存 |
+| 05:00 | 直前の営業日（前日05:00〜当日05:00）の集計を月次タブ `yyyy-MM` に保存 |
+| 17:00（毎月2日のみ） | 前月分を検算し、月次収支報告をOutboxへ登録 |
 | 19:00 | 組織借入状況をOutboxへ登録 |
+
+月次収支報告の集計期間は当月1日05:00〜翌月1日05:00です。報告文には「10/1 07:00 〜 11/1 05:00（10/1 05:00〜07:00の取引を含む）」のように表示します。組織残高、個人残高、組織ローン、BJローン、個人間貸借をJPY/BM別に、月初・月末残高、増減、種類別の内訳で報告します。報告時に欠けている営業日があれば `Transactions` から補完し、日次の合計と月合計が一致するかを検算します。不一致があっても投稿は行い、文面に不一致の対象を明記します。初めて起動した時点では、日次集計は当月分だけをさかのぼって作成し、過去の月の報告は自動投稿しません（必要なら `/report post` を使います）。
 
 Bot停止中に予定時刻を逃した場合、起動後に未完了日から処理します。04:00残高はその時点までの `Transactions` と以前のスナップショットから再構成し、復旧時の現在残高を過去の値として扱いません。`JobName + ExecutionDate` を `ScheduleExecutions` 上の一意キーとして同一ジョブの重複を避けます。
 
@@ -387,4 +400,4 @@ dotnet build NovaDiscordBot.sln
 dotnet test NovaDiscordBot.sln
 ```
 
-テストはインメモリの `IGoogleSheetsClient` を使い、CRUD/論理削除、通貨分離、Interaction冪等性、並行ローン更新、返済制限、04:00時点の台帳復元、スケジュール重複防止、Int64境界、Sheets失敗とRetryを確認します。実Google/Discordアカウントへの通信テストは資格情報を使用できる環境で別途実施してください。
+テストはインメモリの `IGoogleSheetsClient` を使い、CRUD/論理削除、通貨分離、Interaction冪等性、並行ローン更新、返済制限、04:00時点の台帳復元、スケジュール重複防止、Int64境界、Sheets失敗とRetry、月次報告の05:00境界・種類別集計・検算・2日だけの実行を確認します。プルリクエストではGitHub Actions（`.github/workflows/test.yml`）で全テストを実行します。実Google/Discordアカウントへの通信テストは資格情報を使用できる環境で別途実施してください。
